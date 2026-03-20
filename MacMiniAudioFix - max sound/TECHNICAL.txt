@@ -1,0 +1,171 @@
+Mac Mini G4 Audio Fix for Mac OS 9 — Technical Documentation
+=============================================================
+
+Hardware: Mac Mini G4 (A1103), PowerMac10,1 / 10,2
+Software: Mac OS 9.2.2 via MacOS9Lives unsupported G4 hack
+Tool:     CodeWarrior IDE 5, ResEdit
+
+The Problem
+-----------
+The MacOS9Lives OS 9 hack uses Open Firmware to spoof the Mac Mini
+as a PowerMac5,1 (G4 Cube) and injects a "screamer" compatible
+property for the sound hardware. This gets I2S audio data flowing
+through the Intrepid I/O controller's built-in DAC ("Toonie"), but
+the output amplifier GPIOs are never enabled. Result: extremely low
+volume from headphone jack, no internal speaker output.
+
+The startup chime plays at full volume (ROM enables the amps), then
+the screamer Sound Manager driver loads and leaves the amp GPIO pins
+in output-disabled state (0x04: data HIGH, output enable cleared).
+
+Root Cause
+----------
+The Mac Mini has NO TAS3004 or other I2C codec. The "Toonie" audio
+is a bare DAC in the Intrepid mac-io controller. Volume and amp
+control use GPIO pins, not I2C registers. The screamer driver's
+volume/mute commands target a nonexistent TAS3004 and have no effect.
+
+The Intrepid mac-io controller is mapped at physical address
+0x80000000 (from the "assigned-addresses" property in the Name
+Registry, word index 2 of the first 5-tuple).
+
+The Fix
+-------
+Write 0x05 (output enable + data HIGH) to GPIO pins at mac-io
+offsets 0x6E, 0x6F, 0x70, and 0x79. The hardware responds with
+readback value 0x07 (bits 0+1+2 set), confirming the amp is active.
+
+This is implemented as a Mac OS 9 INIT (system extension) that runs
+at startup after the screamer driver, re-enabling the amp outputs.
+
+GPIO Pin Map (Intrepid, mac-io base + offset)
+----------------------------------------------
+Offset  Default  After fix  Function
+0x50    0xDF     -          Active output (unknown, do not touch)
+0x51    0xFF/7F  -          Changes with headphone insertion (bit 7)
+0x52    0x17     -          Active output (unknown)
+0x53    0x68     -          Input (possibly line detect)
+0x54    0x04     -          Input, rejects output writes (not HP detect)
+0x58-6C 0x02     -          ExtInt GPIO group (interrupt enables)
+0x67    0x82/80  -          HEADPHONE DETECT: bit 1 = 1 no HP, 0 = HP in
+0x6D    0x04     0x03       Amp pin, behaves differently (readback 0x03)
+0x6E    0x04     0x07       AMP ENABLE (confirmed)
+0x6F    0x04     0x07       AMP ENABLE (confirmed)
+0x70    0x04     0x07       AMP ENABLE (confirmed)
+0x75    0x07     -          Already active output (unknown)
+0x79    0x04     0x07       AMP ENABLE (confirmed, possibly master)
+
+GPIO Bit Layout
+---------------
+Bit 0 (0x01): Output enable
+Bit 1 (0x02): Active/status (read), interrupt? (write)
+Bit 2 (0x04): Data value (HIGH/LOW)
+Bit 7 (0x80): Varies per pin
+
+Writing 0x05 = output enable + data HIGH = amp ON
+Writing 0x04 = output disabled + data HIGH = amp OFF (standby)
+Writing 0x01 = output enable + data LOW = amp MUTED
+Hardware readback of 0x07 = output active confirmed
+
+FCR Registers (mac-io + offset, 32-bit)
+----------------------------------------
+0x38 (FCR0) = 0xF6001009
+0x3C (FCR1) = 0x61348001  (I2S0 partially enabled)
+0x40 (FCR2) = 0x070083C0
+0x44 (FCR3) = 0x42940000
+
+FCR1 bits for I2S audio (from Linux keylargo.h):
+  Bit 6:  AUDIO_SEL_22MCLK
+  Bit 7:  AUDIO_CLK_OUT_ENABLE
+  Bit 9:  AUDIO_CLK_ENABLE_BIT
+  Bit 10: AUDIO_CELL_ENABLE
+  Bit 12: I2S0_ENABLE
+  Bit 17: I2S0_CLK_ENABLE_BIT
+  Bit 22: I2S0_CELL_ENABLE
+
+Setting missing FCR1 bits had no effect on volume. The I2S stream
+is already running correctly (I2S_CTRL=0x3A41, WORDSIZE=0x10=16bit).
+
+I2S Registers (mac-io + 0x10000)
+---------------------------------
++0x10000 (IER)      = 0x00000045
++0x10010 (CTRL)     = 0x00003A41
++0x10020 (WORDSIZE) = 0x00000010
+
+DBDMA TX channel at mac-io + 0x8200 is active (DMA running).
+
+Known Limitations
+-----------------
+1. Internal speaker and headphone jack output simultaneously.
+   Pins 0x6E-0x70 vs 0x79: not yet determined which controls which.
+   Pin 0x67 reads headphone detect state but the INIT only runs at
+   boot, so runtime switching requires a resident driver or polling.
+
+2. No volume control. The Toonie DAC has no gain registers. The
+   screamer driver's volume slider targets the nonexistent TAS3004.
+   Software volume would require intercepting the Sound Manager
+   output chain to scale PCM samples before they reach the I2S DMA.
+
+3. The volume slider has 3 positions but none affect output level.
+   Mute position should work if it stops the DMA, but currently
+   does not because the screamer driver's mute goes to the TAS3004.
+
+What Failed
+-----------
+- v1: Attempted I2C writes to TAS3004 at address 0x34/0x35.
+  Result: NACK, no effect. The chip does not exist on Mac Mini.
+
+- v2: Brute-force GPIO writes at offsets 0x50-0x6F with active-low.
+  Result: killed existing sound. The screamer driver uses active-high.
+
+- v2 (inverted): Same pins with active-high (0x05).
+  Result: no change. These pins (0x50-0x54) were already configured.
+
+- v3: Set missing FCR1 enable bits.
+  Result: some bits accepted (0x1600), others rejected (0x420080).
+  No volume change.
+
+What Worked
+-----------
+- v5: Setting pins 0x6E, 0x6F, 0x70, 0x79 from 0x04 to 0x05.
+  Result: full volume audio from both headphone jack and internal
+  speaker. These are the amplifier enable GPIOs.
+
+Next Steps for Future Work
+--------------------------
+1. Determine which amp pins control headphone vs internal speaker.
+   Test: enable only 0x6E+0x6F+0x70 (without 0x79) and vice versa.
+   Also try individual pins with a test tone.
+
+2. Implement headphone auto-switching using pin 0x67 as detect.
+   This requires either a VBL task, a Time Manager callback, or a
+   resident DRVR that polls 0x67 and toggles the appropriate amp
+   GPIO group.
+
+3. Software volume control by patching the Sound Manager output
+   path to scale PCM samples. This could intercept SndDoCommand or
+   patch the DMA buffer callback to apply gain scaling.
+
+4. Share findings with MacOS9Lives community — this is the first
+   known software fix for Mac Mini G4 built-in audio under OS 9
+   that doesn't require USB speakers.
+
+Build Instructions
+------------------
+CodeWarrior project settings:
+  Project Type: Code Resource
+  Resource Type: INIT, ID: 0
+  File Type: INIT, Creator: MmAf
+  Linker: MacOS PPC Linker
+  Entry Point: main
+  Libraries: InterfaceLib, NameRegistryLib, DriverServicesLib
+
+ResEdit resources to add:
+  vers ID=1: version info
+  STR  ID=-16396: "MacMini Audio Fix" (Extensions Manager name)
+  STR  ID=-16482: description text
+  ICN# ID=128: success icon (shown at boot)
+  ICN# ID=129: failure icon
+  File Type/Creator: INIT / MmAf
+
+Install to: [Startup Disk]:System Folder:Extensions:

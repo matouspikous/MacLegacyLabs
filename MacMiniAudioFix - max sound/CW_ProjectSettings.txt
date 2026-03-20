@@ -1,0 +1,95 @@
+# CodeWarrior Project Settings Export
+# MacMini Audio Fix
+# Import these settings when creating your CW project
+
+# ============================================
+# TARGET SETTINGS
+# ============================================
+
+Target Name          = MacMiniAudioFix
+Linker               = MacOS PPC Linker
+Output Type          = Code Resource
+
+# Code Resource Settings
+ResType              = INIT
+ResID                = 0
+ResName              = 
+File Name            = MacMini Audio Fix
+File Creator         = MmAf
+File Type            = INIT
+
+# ============================================
+# PPC CODEGEN
+# ============================================
+
+Struct Alignment      = PowerPC
+Strings Read Only     = true
+Pool Strings          = true
+Peephole Optimizer    = true
+Schedule 750          = true  
+# ^^ Schedule for G3/G4 (750/7400 series)
+
+# ============================================
+# PPC LINKER
+# ============================================
+
+Dead Strip Init Code  = true
+Entry Point Name      = main
+Generate SYM File     = true
+
+# ============================================
+# C/C++ LANGUAGE
+# ============================================
+
+Source Model           = ANSI
+Enums Always Int       = true
+RTTI                   = false
+Exceptions             = false
+# ^^ Keep RTTI/exceptions off to minimize code size
+
+# ============================================
+# SOURCE FILES
+# ============================================
+
+# Add these files to your project:
+#
+# Group "Source":
+#   MacMiniAudioFix.c
+#
+# Group "Resources":
+#   MacMiniAudioFix.r
+#
+# Group "Mac OS Libraries" (from CW Libraries folder):
+#   InterfaceLib
+#   NameRegistryLib
+#   DriverServicesLib
+
+# ============================================
+# BUILD STEPS
+# ============================================
+
+# 1. Make (Cmd-M) builds the code resource
+# 2. Post-build: run Rez to merge resources:
+#    Rez MacMiniAudioFix.r -o "MacMini Audio Fix" -append
+# 3. Or use ResEdit to add resources manually
+# 4. Verify with ResEdit: open final file and check
+#    that INIT (ID 0), ICN# (128-130), vers (1,2),
+#    STR (-16482, -16396) all exist
+
+# ============================================
+# NOTES
+# ============================================
+
+# This produces a code resource, not an application.
+# The output file IS the extension - just drop it
+# into System Folder:Extensions: and restart.
+#
+# The code resource entry point is main().
+# CodeWarrior will generate a PPC code resource
+# with the proper header for the System to load
+# as an INIT at startup time.
+#
+# Memory: The extension uses ~16-32K during INIT
+# execution. After init completes, the code can be
+# purged from memory (it's a one-shot fix, no
+# resident component installed).
